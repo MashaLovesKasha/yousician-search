@@ -1,6 +1,7 @@
 import sys
 import time
 from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
@@ -8,16 +9,102 @@ from selenium.common.exceptions import NoSuchElementException, TimeoutException
 
 
 def main():
-    if len(sys.argv) != 2:
-        print("Usage: python yousician_search.py <search_string>")
+    if len(sys.argv) < 2:
+        print("Usage: python yousician_search.py <search_string> [--headless]")
         sys.exit(1)
 
-    search_string = sys.argv[1]
+    search_string = " ".join(arg for arg in sys.argv[1:] if arg != "--headless")
+    headless = "--headless" in sys.argv
+
     try:
-        search_and_print_results(search_string)
+        get_sorted_results(search_string, headless)
     except Exception as e:
         print(f"An error occurred: {e}")
         sys.exit(1)
+
+
+def get_sorted_results(search_string, headless=False):
+    """
+    Orchestrates the search, processing, sorting, and displaying of the results
+    Allows running in headless mode if specified
+    """
+    chrome_options = Options()
+    if headless:
+        chrome_options.add_argument("--headless=new")
+    with webdriver.Chrome(options=chrome_options) as driver:
+        try:
+            perform_search(driver, search_string)
+            process_and_sort_songs(driver)
+        except Exception as e:
+            print(f"An error occurred: {e}")
+        finally:
+            driver.quit()
+
+
+def perform_search(driver, search_string):
+    """
+    Opens the Yousician songs page, accepts cookies
+    and performs a search using the provided search string
+    """
+    # Go to the Yousician songs page
+    driver.get("https://yousician.com/songs")
+    wait_for_page_load(driver)
+
+    # Clicks "Accept All" on the cookie banner
+    handle_cookie_banner(driver)
+
+    print(f"Performing search for: {search_string}")
+    search_input = driver.find_element(By.CSS_SELECTOR, "input[class^='SearchInput']")
+    # Type the search string and press Enter
+    search_input.send_keys(search_string + Keys.RETURN)
+
+
+def process_and_sort_songs(driver):
+    """
+    Parses the song and artist information from the loaded page,
+    handles pagination by clicking the "Next" button until the button becomes disabled
+    and sorts the results by artist and song name in a case-insensitive manner
+    """
+    all_songs = []
+    pagination_detected = False
+
+    while True:
+        wait_for_page_load(driver)
+
+        # Find all song rows on the current page
+        song_elements = driver.find_elements(By.CSS_SELECTOR, "a[class^='TableHead']")
+
+        for song_element in song_elements:
+            song_info = extract_song_info(song_element)
+            if song_info:
+                all_songs.append(song_info)
+
+        # Check for pagination buttons
+        pagination_buttons = driver.find_elements(By.CSS_SELECTOR, "button[class^='PaginationButton']")
+
+        if pagination_buttons and not pagination_detected:
+            print("Pagination detected. Navigating through pages...")
+            pagination_detected = True
+
+        if not pagination_buttons or pagination_buttons[-1].get_attribute("disabled") is not None:
+            if pagination_detected:
+                print("Reached the last page. Stopping pagination")
+            break
+
+        # Click 'Next' button to go to the next page
+        next_button = pagination_buttons[-1]
+        driver.execute_script("arguments[0].click();", next_button)
+
+    # If no songs were found, skip sorting
+    if not all_songs:
+        print("No songs found in the search results")
+        return
+
+    print("Sorting the collected songs by artist and song name...")
+    print()
+    all_songs.sort(key=lambda song: (song[0].lower(), song[1].lower()))
+    for artist, song in all_songs:
+        print(f"{artist} - {song}")
 
 
 def wait_for_page_load(driver, timeout=10):
@@ -27,32 +114,6 @@ def wait_for_page_load(driver, timeout=10):
     WebDriverWait(driver, timeout).until(
         lambda d: d.execute_script("return document.readyState") == "complete"
     )
-
-
-def search_and_print_results(search_string):
-    """
-    Performs the search and prints the results
-    """
-    with webdriver.Chrome() as driver:
-        try:
-            # Go to the Yousician songs page
-            driver.get("https://yousician.com/songs")
-            wait_for_page_load(driver)
-
-            # Clicks "Accept All" on the cookie banner
-            handle_cookie_banner(driver)
-
-            print(f"Performing search for: {search_string}")
-            search_input = driver.find_element(By.CSS_SELECTOR, "input[class^='SearchInput']")
-            # Type the search string and press Enter
-            search_input.send_keys(search_string + Keys.RETURN)
-
-            parse_and_print_songs(driver)
-
-        except Exception as e:
-            print(f"An error occurred: {e}")
-        finally:
-            driver.quit()
 
 
 def handle_cookie_banner(driver):
@@ -87,70 +148,6 @@ def extract_song_info(song_element):
     except IndexError:
         print("Could not parse song or artist name")
         return None
-
-
-def parse_and_print_songs(driver):
-    """
-    Parses the song and artist information from the loaded page
-    Handles pagination by clicking the "Next" button until the button becomes disabled
-    Logs if the initial search result is empty
-    """
-    all_songs = []
-    wait_for_page_load(driver)
-
-    # Find all song rows on the first page
-    song_elements = driver.find_elements(By.CSS_SELECTOR, "a[class^='TableHead']")
-
-    if not song_elements:
-        print("No songs found on the initial search page")
-        return
-
-    # Extract song info from the first page
-    for song_element in song_elements:
-        song_info = extract_song_info(song_element)
-        if song_info:
-            all_songs.append(song_info)
-
-    # Check for pagination buttons
-    pagination_buttons = driver.find_elements(By.CSS_SELECTOR, "button[class^='PaginationButton']")
-    if len(pagination_buttons) > 1:
-        print("Pagination detected. Preparing to navigate through pages...")
-
-        while True:
-            # Select the last button in the list (">" button)
-            next_button = pagination_buttons[-1]
-
-            # Check if the last button is disabled
-            if next_button.get_attribute("disabled") is not None:
-                print("Reached the last page. Stopping pagination")
-                break
-
-            print("Clicking 'Next' button to go to the next page...")
-            driver.execute_script("arguments[0].click();", next_button)
-            wait_for_page_load(driver)
-
-            # Process the new page
-            song_elements = driver.find_elements(By.CSS_SELECTOR, "a[class^='TableHead']")
-            if not song_elements:
-                print("Warning: No items found on this page after clicking 'Next'. Possible issue with pagination!")
-                break
-
-            for song_element in song_elements:
-                song_info = extract_song_info(song_element)
-                if song_info:
-                    all_songs.append(song_info)
-
-            # Update pagination buttons for the next iteration
-            pagination_buttons = driver.find_elements(By.CSS_SELECTOR, "button[class^='PaginationButton']")
-
-    # Log before starting the sorting process
-    print("Sorting the collected songs by artist and song name...")
-    print()
-
-    # Sort and print the songs
-    all_songs.sort()
-    for artist, song in all_songs:
-        print(f"{artist} - {song}")
 
 
 if __name__ == "__main__":
