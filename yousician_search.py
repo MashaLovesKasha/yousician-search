@@ -1,6 +1,10 @@
 import sys
-import requests
-from bs4 import BeautifulSoup
+import time
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.common.exceptions import NoSuchElementException, TimeoutException
 
 
 def main():
@@ -11,93 +15,131 @@ def main():
     search_string = sys.argv[1]
     try:
         search_and_print_results(search_string)
-    except requests.exceptions.RequestException as e:
-        print(f"An error occurred during the HTTP request: {e}")
-        sys.exit(1)
     except Exception as e:
-        print(f"An unexpected error occurred: {e}")
+        print(f"An error occurred: {e}")
         sys.exit(1)
 
 
 def search_and_print_results(search_string):
-    base_url = build_search_url(search_string)
+    """
+    Performs the search and prints the results
+    """
+    with webdriver.Chrome() as driver:
+        try:
+            # Go to the Yousician songs page
+            driver.get("https://yousician.com/songs")
+            WebDriverWait(driver, 10).until(
+                lambda d: d.execute_script("return document.readyState") == "complete"
+            )
+
+            # Clicks "Accept All" on the cookie banner
+            handle_cookie_banner(driver)
+
+            print(f"Performing search for: {search_string}")
+            search_input = driver.find_element(By.CSS_SELECTOR, "input[class^='SearchInput']")
+            # Type the search string and press Enter
+            search_input.send_keys(search_string + Keys.RETURN)
+
+            parse_and_print_songs(driver)
+
+        except Exception as e:
+            print(f"An error occurred: {e}")
+        finally:
+            driver.quit()
+
+
+def handle_cookie_banner(driver):
+    """
+    Handles the cookie consent banner by clicking the "Accept All" button
+    """
+    try:
+        time.sleep(1)
+        accept_button = WebDriverWait(driver, 10).until(
+            lambda d: d.find_element(By.ID, "onetrust-accept-btn-handler")
+        )
+        accept_button.click()
+
+        print("Cookie banner is closed")
+    except TimeoutException:
+        print("Cookie banner did not appear within the timeout, proceeding with the test")
+    except NoSuchElementException:
+        print("No cookie banner found, proceeding with the test")
+    except Exception as e:
+        print(f"Error interacting with cookie banner: {e}")
+
+
+def parse_and_print_songs(driver):
+    """
+    Parses the song and artist information from the loaded page.
+    Handles pagination by clicking the "Next" button until the button becomes disabled.
+    Logs if the initial search result is empty.
+    """
     all_songs = []
-    page_number = 1
 
-    while True:
-        url = f"{base_url}?page={page_number}"
-        response = fetch_search_results(url)
-        songs, has_more_pages = parse_songs_and_check_pagination(response.text)
-        all_songs.extend(songs)
+    WebDriverWait(driver, 10).until(
+        lambda d: d.execute_script("return document.readyState") == "complete"
+    )
 
-        if not has_more_pages:
-            break
+    # Find all song rows on the first page
+    song_elements = driver.find_elements(By.CSS_SELECTOR, "a[class^='TableHead']")
 
-        page_number += 1  # Move to the next page
-
-    if not all_songs:
-        print("No songs found.")
+    if not song_elements:
+        print("No songs found on the initial search page")
         return
 
-    all_songs.sort()
-    print_songs(all_songs)
-
-
-def build_search_url(search_string):
-    """
-    Constructs the search URL for Yousician songs.
-    Joins multiple words with hyphens.
-    """
-    formatted_search_string = "-".join(search_string.split())
-    return f"https://yousician.com/songs/search/{formatted_search_string}"
-
-
-def fetch_search_results(url):
-    """
-    Fetches the search results page from the given URL.
-    """
-    print(f"Fetching URL: {url}")
-    response = requests.get(url)
-    response.raise_for_status()  # This will raise an error for HTTP errors
-    return response
-
-
-def parse_songs_and_check_pagination(html):
-    """
-    Parses the song and artist information from the HTML content.
-    Also checks if there are more pages by inspecting the pagination buttons.
-    """
-    soup = BeautifulSoup(html, 'html.parser')
-    print("HTML fetched successfully, parsing...")
-
-    songs = []
-
-    for song_element in soup.find_all('a', class_=lambda x: x and x.startswith('TableHead')):
+    for song_element in song_elements:
         try:
-            divs = song_element.find_all('div', class_=lambda x: x and x.startswith('TableCell'))
-            song_name = divs[0].find('p', class_=lambda x: x and x.startswith('Typography')).text.strip()
-            artist_name = divs[1].find('p', class_=lambda x: x and x.startswith('Typography')).text.strip()
-            songs.append((artist_name, song_name))
-        except (AttributeError, IndexError) as e:
-            print(f"Could not find song or artist information: {e}")
+            song_name = song_element.find_elements(By.CSS_SELECTOR, "p[class^='Typography']")[0].text
+            artist_name = song_element.find_elements(By.CSS_SELECTOR, "p[class^='Typography']")[1].text
+            all_songs.append((artist_name, song_name))
+        except IndexError:
+            print("Could not parse song or artist name")
 
-    # Determine if there is a next page by checking the pagination buttons
-    has_more_pages = False
-    pagination_buttons = soup.find_all('button', class_=lambda x: x and x.startswith('PaginationButton'))
+    # Check for pagination buttons
+    pagination_buttons = driver.find_elements(By.CSS_SELECTOR, "button[class^='PaginationButton']")
+    if len(pagination_buttons) > 1:
+        print("Pagination detected. Preparing to navigate through pages...")
 
-    if pagination_buttons:
-        last_button = pagination_buttons[-1]
-        if 'disabled' not in last_button.attrs:
-            has_more_pages = True  # If the last button is not disabled, there's a next page
+        while True:
+            # Select the last button in the list (">" button)
+            next_button = pagination_buttons[-1]
 
-    return songs, has_more_pages
+            # Check if the last button is disabled
+            if next_button.get_attribute("disabled") is not None:
+                print("Reached the last page. Stopping pagination")
+                break
 
+            print("Clicking 'Next' button to go to the next page...")
+            driver.execute_script("arguments[0].click();", next_button)
 
-def print_songs(songs):
-    """
-    Prints the list of songs, sorted by artist and song name.
-    """
-    for artist, song in songs:
+            WebDriverWait(driver, 10).until(
+                lambda d: d.execute_script("return document.readyState") == "complete"
+            )
+
+            # Process the new page
+            song_elements = driver.find_elements(By.CSS_SELECTOR, "a[class^='TableHead']")
+            if not song_elements:
+                print("Warning: No items found on this page after clicking 'Next'. Possible issue with pagination!")
+                break
+
+            for song_element in song_elements:
+                try:
+                    song_name = song_element.find_elements(By.CSS_SELECTOR, "p[class^='Typography']")[0].text
+                    artist_name = song_element.find_elements(By.CSS_SELECTOR, "p[class^='Typography']")[1].text
+                    all_songs.append((artist_name, song_name))
+                except IndexError:
+                    print("Could not parse song or artist name")
+
+            # Update pagination buttons for the next iteration
+            pagination_buttons = driver.find_elements(By.CSS_SELECTOR, "button[class^='PaginationButton']")
+
+    # Log before starting the sorting process
+    print("Sorting the collected songs by artist and song name...")
+    print()
+
+    # Sort and print the songs
+    all_songs.sort()
+    for artist, song in all_songs:
         print(f"{artist} - {song}")
 
 
