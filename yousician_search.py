@@ -20,6 +20,15 @@ def main():
         sys.exit(1)
 
 
+def wait_for_page_load(driver, timeout=10):
+    """
+    Waits for the page to fully load by checking that document.readyState is 'complete'
+    """
+    WebDriverWait(driver, timeout).until(
+        lambda d: d.execute_script("return document.readyState") == "complete"
+    )
+
+
 def search_and_print_results(search_string):
     """
     Performs the search and prints the results
@@ -28,9 +37,7 @@ def search_and_print_results(search_string):
         try:
             # Go to the Yousician songs page
             driver.get("https://yousician.com/songs")
-            WebDriverWait(driver, 10).until(
-                lambda d: d.execute_script("return document.readyState") == "complete"
-            )
+            wait_for_page_load(driver)
 
             # Clicks "Accept All" on the cookie banner
             handle_cookie_banner(driver)
@@ -68,17 +75,28 @@ def handle_cookie_banner(driver):
         print(f"Error interacting with cookie banner: {e}")
 
 
+def extract_song_info(song_element):
+    """
+    Extracts the song name and artist name from a song element
+    Returns a tuple of (artist_name, song_name)
+    """
+    try:
+        song_name = song_element.find_elements(By.CSS_SELECTOR, "p[class^='Typography']")[0].text
+        artist_name = song_element.find_elements(By.CSS_SELECTOR, "p[class^='Typography']")[1].text
+        return artist_name, song_name
+    except IndexError:
+        print("Could not parse song or artist name")
+        return None
+
+
 def parse_and_print_songs(driver):
     """
-    Parses the song and artist information from the loaded page.
-    Handles pagination by clicking the "Next" button until the button becomes disabled.
-    Logs if the initial search result is empty.
+    Parses the song and artist information from the loaded page
+    Handles pagination by clicking the "Next" button until the button becomes disabled
+    Logs if the initial search result is empty
     """
     all_songs = []
-
-    WebDriverWait(driver, 10).until(
-        lambda d: d.execute_script("return document.readyState") == "complete"
-    )
+    wait_for_page_load(driver)
 
     # Find all song rows on the first page
     song_elements = driver.find_elements(By.CSS_SELECTOR, "a[class^='TableHead']")
@@ -87,13 +105,11 @@ def parse_and_print_songs(driver):
         print("No songs found on the initial search page")
         return
 
+    # Extract song info from the first page
     for song_element in song_elements:
-        try:
-            song_name = song_element.find_elements(By.CSS_SELECTOR, "p[class^='Typography']")[0].text
-            artist_name = song_element.find_elements(By.CSS_SELECTOR, "p[class^='Typography']")[1].text
-            all_songs.append((artist_name, song_name))
-        except IndexError:
-            print("Could not parse song or artist name")
+        song_info = extract_song_info(song_element)
+        if song_info:
+            all_songs.append(song_info)
 
     # Check for pagination buttons
     pagination_buttons = driver.find_elements(By.CSS_SELECTOR, "button[class^='PaginationButton']")
@@ -111,10 +127,7 @@ def parse_and_print_songs(driver):
 
             print("Clicking 'Next' button to go to the next page...")
             driver.execute_script("arguments[0].click();", next_button)
-
-            WebDriverWait(driver, 10).until(
-                lambda d: d.execute_script("return document.readyState") == "complete"
-            )
+            wait_for_page_load(driver)
 
             # Process the new page
             song_elements = driver.find_elements(By.CSS_SELECTOR, "a[class^='TableHead']")
@@ -123,12 +136,9 @@ def parse_and_print_songs(driver):
                 break
 
             for song_element in song_elements:
-                try:
-                    song_name = song_element.find_elements(By.CSS_SELECTOR, "p[class^='Typography']")[0].text
-                    artist_name = song_element.find_elements(By.CSS_SELECTOR, "p[class^='Typography']")[1].text
-                    all_songs.append((artist_name, song_name))
-                except IndexError:
-                    print("Could not parse song or artist name")
+                song_info = extract_song_info(song_element)
+                if song_info:
+                    all_songs.append(song_info)
 
             # Update pagination buttons for the next iteration
             pagination_buttons = driver.find_elements(By.CSS_SELECTOR, "button[class^='PaginationButton']")
