@@ -9,8 +9,8 @@ from selenium.common.exceptions import NoSuchElementException, TimeoutException
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: python yousician_search.py <search_string> [--headless]")
+    if len(sys.argv) < 2 or (len(sys.argv) == 2 and sys.argv[1] == "--headless"):
+        print("Usage: pyth on yousician_search.py <search_string> [--headless]")
         sys.exit(1)
 
     search_string = " ".join(arg for arg in sys.argv[1:] if arg != "--headless")
